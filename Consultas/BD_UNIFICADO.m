@@ -116,7 +116,7 @@ let
                     {"Cantidad Contratado", each List.Sum(List.Transform([Cantidad Contratado], ToNumberSafe)), type number},
                     {"VT Contratado", each List.Sum(List.Transform([VT Contratado], ToNumberSafe)), type number},
                     {"Nombre Contratista_Ct", each List.First(List.RemoveNulls([Nombre Contratista])), type text},
-                    {"# OC / Contrato_Ct", each List.First(List.RemoveNulls([# OC / Contrato])), type text},
+                    {"# OC / Contrato_Ct", each List.First(List.RemoveNulls([#"# OC / Contrato"])), type text},
                     {"Actividad_Ct", each List.First(List.RemoveNulls([Actividad])), type text},
                     {"Ins_Ct", each List.First(List.RemoveNulls([Ins])), type text}
                 }
@@ -128,7 +128,7 @@ let
                     {"Cantidad Comprado", each List.Sum(List.Transform([Cantidad Comprado], ToNumberSafe)), type number},
                     {"VT Comprado", each List.Sum(List.Transform([VT Comprado], ToNumberSafe)), type number},
                     {"Nombre Contratista_OC", each List.First(List.RemoveNulls([Nombre Contratista])), type text},
-                    {"# OC / Contrato_OC", each List.First(List.RemoveNulls([# OC / Contrato])), type text},
+                    {"# OC / Contrato_OC", each List.First(List.RemoveNulls([#"# OC / Contrato"])), type text},
                     {"Actividad_OC", each List.First(List.RemoveNulls([Actividad])), type text},
                     {"Ins_OC", each List.First(List.RemoveNulls([Ins])), type text}
                 }
@@ -178,7 +178,7 @@ let
             ConNombres = Table.AddColumn(Exp3, "Actividad", each if [Actividad_P] <> null then [Actividad_P] else if [Actividad_Ct] <> null then [Actividad_Ct] else [Actividad_OC], type text),
             ConIns = Table.AddColumn(ConNombres, "Ins", each if [Ins_P] <> null then [Ins_P] else if [Ins_Ct] <> null then [Ins_Ct] else [Ins_OC], type text),
             ConContratista = Table.AddColumn(ConIns, "Nombre Contratista", each if [Nombre Contratista_Ct] <> null then [Nombre Contratista_Ct] else [Nombre Contratista_OC], type text),
-            ConOC = Table.AddColumn(ConContratista, "# OC / Contrato", each if [# OC / Contrato_Ct] <> null then [# OC / Contrato_Ct] else [# OC / Contrato_OC], type text),
+            ConOC = Table.AddColumn(ConContratista, "# OC / Contrato", each if [#"# OC / Contrato_Ct"] <> null then [#"# OC / Contrato_Ct"] else [#"# OC / Contrato_OC"], type text),
             ConTipo = Table.AddColumn(ConOC, "Tipo", each "ORACLE", type text),
 
             Limpio = Table.RemoveColumns(ConTipo, {"Actividad_P", "Ins_P", "Actividad_Ct", "Ins_Ct", "Actividad_OC", "Ins_OC", "Nombre Contratista_Ct", "Nombre Contratista_OC", "# OC / Contrato_Ct", "# OC / Contrato_OC"}),
