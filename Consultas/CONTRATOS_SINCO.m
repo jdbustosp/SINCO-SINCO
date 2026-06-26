@@ -201,7 +201,9 @@ let
                     umIns = Record.Field(r, ItemsUMColName),
                     dTxt0 = if descIns = null then "" else Text.Trim(Text.From(descIns)),
                     umTxt = if umIns = null then "" else Text.Trim(Text.From(umIns)),
-                    baseTxt = if umTxt = "" then dTxt0 else dTxt0 & " (" & umTxt & ")"
+                    // la descripcion puede traer ya un "(UM)" propio; se quita antes de poner la oficial, para no duplicar
+                    dTxtSinParen = FnSepararUM(dTxt0)[Nombre],
+                    baseTxt = if umTxt = "" then dTxtSinParen else dTxtSinParen & " (" & umTxt & ")"
                 in baseTxt, type text),
 
             OrigenAPU_Raw = try Excel.Workbook(BinarioPresupuesto, null, true){0}[Data]
