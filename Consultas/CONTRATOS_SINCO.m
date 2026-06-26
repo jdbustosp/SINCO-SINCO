@@ -100,6 +100,18 @@ let
     FnDigits = (v as any) as nullable text =>
         let t = Text.Trim(Text.From(if v = null then "" else v)), d = Text.Select(t, {"0".."9"}) in if d = "" then null else d,
 
+    // Quita tildes/enies y caracteres de codificacion mal leida (reemplazo "?")
+    FnQuitarTildes = (v as any) as nullable text =>
+        let
+            t0 = try (if v = null then null else Text.From(v)) otherwise null,
+            repl = {
+                {"á","a"},{"é","e"},{"í","i"},{"ó","o"},{"ú","u"},{"ñ","n"},{"ü","u"},
+                {"Á","A"},{"É","E"},{"Í","I"},{"Ó","O"},{"Ú","U"},{"Ñ","N"},{"Ü","U"},
+                {Character.FromNumber(65533), ""}
+            },
+            t1 = if t0 = null then null else List.Accumulate(repl, t0, (state, current) => Text.Replace(state, current{0}, current{1}))
+        in t1,
+
     // Separa "Nombre (UM) - resto" -> [Nombre = "Nombre - resto", UM] (el parentesis puede no estar al final)
     FnSepararUM = (texto as nullable text) as record =>
         let
@@ -154,7 +166,7 @@ let
     FxProcesarCentroCosto = (BinarioSeguimiento as binary, BinarioPresupuesto as binary) as table =>
         let
             OrigenItems = try Excel.Workbook(BinarioSeguimiento, null, true){0}[Data]
-                          otherwise Html.Table(Text.FromBinary(BinarioSeguimiento, 65001), Columnas_HTML25, [RowSelector="tr"]),
+                          otherwise Html.Table(Text.FromBinary(BinarioSeguimiento, 1252), Columnas_HTML25, [RowSelector="tr"]),
             ItemsPrepared = Table.Buffer(FnPrepareTableWithHeader(OrigenItems)),
 
             ItemsColNames = Table.ColumnNames(ItemsPrepared),
@@ -207,7 +219,7 @@ let
                 in baseTxt, type text),
 
             OrigenAPU_Raw = try Excel.Workbook(BinarioPresupuesto, null, true){0}[Data]
-                            otherwise Html.Table(Text.FromBinary(BinarioPresupuesto, 65001), Columnas_APU, [RowSelector="tr"]),
+                            otherwise Html.Table(Text.FromBinary(BinarioPresupuesto, 1252), Columnas_APU, [RowSelector="tr"]),
             OrigenAPU_Cols = Table.SelectColumns(OrigenAPU_Raw, List.FirstN(Table.ColumnNames(OrigenAPU_Raw), 3)),
             OrigenAPU = Table.RenameColumns(OrigenAPU_Cols, List.Zip({Table.ColumnNames(OrigenAPU_Cols), {"Columna 1", "Columna 2", "Columna 3"}})),
 
@@ -268,7 +280,7 @@ let
     FxParsearContratos = (binario as binary) as table =>
         let
             Source_Raw = try Excel.Workbook(binario, null, true){0}[Data]
-                     otherwise Html.Table(Text.FromBinary(binario, 65001), Columnas_HTML25, [RowSelector="tr"]),
+                     otherwise Html.Table(Text.FromBinary(binario, 1252), Columnas_HTML25, [RowSelector="tr"]),
             Source_ColNames = Table.ColumnNames(Source_Raw),
             Source = Table.RenameColumns(Source_Raw, List.Zip({Source_ColNames, List.Transform({1..List.Count(Source_ColNames)}, each "Columna" & Text.From(_))})),
 
@@ -322,13 +334,13 @@ let
     AddSepInsumo = Table.AddColumn(AddSepGrupo, "_SepInsumo", each FnSepararUM([InsumoTxt]), type record),
 
     AddFinal = Table.AddColumn(AddSepInsumo, "_Final", each [
-        Grupo = [_SepGrupo][Nombre],
-        UMGrupo = [_SepGrupo][UM],
+        Grupo = FnQuitarTildes([_SepGrupo][Nombre]),
+        UMGrupo = FnQuitarTildes([_SepGrupo][UM]),
         CantidadGrupo = [Cantidad Contratado],
-        Insumo = [_SepInsumo][Nombre],
-        UMInsumo = [_SepInsumo][UM],
+        Insumo = FnQuitarTildes([_SepInsumo][Nombre]),
+        UMInsumo = FnQuitarTildes([_SepInsumo][UM]),
         ValorUnitarioInsumo = if [Cantidad Contratado] <> null and [Cantidad Contratado] <> 0 then [VT Contratado] / [Cantidad Contratado] else [VT Contratado],
-        Descripcion = Text.Combine(List.Select({Text.From([Descripcion contrato]), Text.From([Nombre Contratista]), Text.From([Cod Contrato])}, each _ <> null and Text.Trim(_) <> ""), " / ")
+        Descripcion = FnQuitarTildes(Text.Combine(List.Select({Text.From([Descripcion contrato]), Text.From([Nombre Contratista]), Text.From([Cod Contrato])}, each _ <> null and Text.Trim(_) <> ""), " / "))
     ]),
     ExpFinal = Table.ExpandRecordColumn(AddFinal, "_Final", {"Grupo","UMGrupo","CantidadGrupo","Insumo","UMInsumo","ValorUnitarioInsumo","Descripcion"}),
 
@@ -348,7 +360,7 @@ let
             bin = FnPickLatest(tbl, "ESTADO DE CONTRATOS"),
             tbl0 = if bin = null then #table({"FilaTexto"}, {}) else
                 let
-                    Source_Raw = try Excel.Workbook(bin, null, true){0}[Data] otherwise Html.Table(Text.FromBinary(bin, 65001), Columnas_HTML25, [RowSelector="tr"]),
+                    Source_Raw = try Excel.Workbook(bin, null, true){0}[Data] otherwise Html.Table(Text.FromBinary(bin, 1252), Columnas_HTML25, [RowSelector="tr"]),
                     withText = Table.AddColumn(Source_Raw, "FilaTexto", each Text.Combine(List.Transform(List.Select(Record.FieldValues(_), each _ <> null and _ <> ""), Text.From), " "), type text)
                 in Table.SelectColumns(withText, {"FilaTexto"}),
             rows = Table.AddColumn(tbl0, "Contrato", each if Text.Contains(Text.Upper([FilaTexto]), "CONTRATO NO") then let after = Text.Range([FilaTexto], Text.PositionOf(Text.Upper([FilaTexto]), "CONTRATO NO") + 11) in FnDigits(Text.BeforeDelimiter(Text.TrimStart(after, {".",":"," "}), " ")) else null, type text),
