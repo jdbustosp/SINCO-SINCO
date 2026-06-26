@@ -100,14 +100,17 @@ let
     FnDigits = (v as any) as nullable text =>
         let t = Text.Trim(Text.From(if v = null then "" else v)), d = Text.Select(t, {"0".."9"}) in if d = "" then null else d,
 
-    // Separa "Nombre (UM)" -> [Nombre, UM]
+    // Separa "Nombre (UM) - resto" -> [Nombre = "Nombre - resto", UM] (el parentesis puede no estar al final)
     FnSepararUM = (texto as nullable text) as record =>
         let
             t = if texto = null then "" else Text.Trim(Text.From(texto)),
-            tieneParen = Text.EndsWith(t, ")") and Text.Contains(t, "("),
-            posIni = if tieneParen then Text.PositionOf(t, "(", Occurrence.Last) else -1,
-            nombre = if tieneParen and posIni > 0 then Text.Trim(Text.Range(t, 0, posIni)) else t,
-            um = if tieneParen and posIni > 0 then Text.Trim(Text.Range(t, posIni + 1, Text.Length(t) - posIni - 2)) else null
+            posIni = Text.PositionOf(t, "(", Occurrence.Last),
+            posFin = if posIni = -1 then -1 else Text.PositionOf(t, ")", Occurrence.Last),
+            valido = posIni >= 0 and posFin > posIni,
+            um = if valido then Text.Trim(Text.Range(t, posIni + 1, posFin - posIni - 1)) else null,
+            antes = if valido then Text.Trim(Text.Range(t, 0, posIni)) else t,
+            despues = if valido then Text.Trim(Text.Range(t, posFin + 1)) else "",
+            nombre = if despues = "" then antes else Text.Trim(antes & " " & despues)
         in [Nombre = nombre, UM = um],
 
     // ===== 3. Listado de Centros de Costo y archivos de "Actual" =====
