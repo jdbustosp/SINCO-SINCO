@@ -239,8 +239,10 @@ let
                     nombreReal = if nombreExtraido = "" then "Actividad " & codTxt else nombreExtraido,
                     umTxt = Text.Trim(Text.From(if [UM_Actividad] = null then "" else [UM_Actividad])),
                     nombreLimpio = Text.Combine(List.Select(Text.Split(nombreReal, " "), each _ <> ""), " "),
-                    actTxt = if umTxt = "" then codTxt & "-" & nombreLimpio
-                             else codTxt & "-" & nombreLimpio & " (" & umTxt & ")"
+                    // el nombre crudo puede traer ya un "(UM)" propio; se quita antes de poner el oficial, para no duplicar
+                    nombreSinParen = FnSepararUM(nombreLimpio)[Nombre],
+                    actTxt = if umTxt = "" then codTxt & "-" & nombreSinParen
+                             else codTxt & "-" & nombreSinParen & " (" & umTxt & ")"
                 in actTxt, type text),
 
             Final = Table.SelectColumns(ItemsWithActividad, {"Codigo ins", "Ins", "Codigo act", "Actividad"})
