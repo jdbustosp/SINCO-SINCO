@@ -1,6 +1,7 @@
 let
     // ===== 1. Parametros =====
     ParamProyecto = Text.Trim(Text.From(ProyectoActual)),
+    ParamCC = try Text.Trim(Text.From(CentroCostoActual)) otherwise "",
     FechaVersion = try Text.Trim(Text.From(FechaVersionComparar)) otherwise "",
     SiteUrl = "https://colsubsidio365.sharepoint.com/sites/MiGerenciaViv",
     BasePath = "/sites/MiGerenciaViv/Departamento Tecnico/COORDINACION DE PRESUPUESTOS/0. Reportes EDT - Control costos interno/" & ParamProyecto,
@@ -136,7 +137,21 @@ let
     CCFolders = if FolderResponse = null or not Record.HasFields(FolderResponse, "value")
         then #table({"Name"}, {})
         else Table.FromRecords(FolderResponse[value]),
-    Centros = List.Transform(Table.Column(CCFolders, "Name"), each Text.From(_)),
+    CentrosTodos = List.Transform(Table.Column(CCFolders, "Name"), each Text.From(_)),
+    Centros =
+        if ParamCC = "" then CentrosTodos
+        else
+            let
+                Match = List.Select(CentrosTodos, each Text.Upper(Text.Trim(_)) = Text.Upper(ParamCC))
+            in
+                if List.Count(Match) = 0 then
+                    error Error.Record(
+                        "CONTRATOS_SINCO",
+                        "El centro de costos '" & ParamCC & "' no existe dentro del proyecto '" & ParamProyecto & "'. Centros disponibles: " & Text.Combine(CentrosTodos, ", "),
+                        [ProyectoActual = ParamProyecto, CentroCostoActual = ParamCC]
+                    )
+                else
+                    Match,
 
     FnFilesIn = (cc as text, subfolder as text) as table =>
         let
