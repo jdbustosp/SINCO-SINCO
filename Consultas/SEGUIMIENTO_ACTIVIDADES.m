@@ -30,7 +30,12 @@ let
                     Timeout = #duration(0, 0, 5, 0)
                 ])),
                 TextoHTML = Text.FromBinary(Binario, 65001),
-                Columnas = List.Transform({1..35}, each {"Columna" & Text.From(_), "td:nth-child(" & Text.From(_) & "), th:nth-child(" & Text.From(_) & ")"}),
+                // Solo se usan las primeras 4 columnas (Cod/Descripcion/Tipo/UM) para
+                // clasificar filas. Pedir mas columnas de las que se usan multiplica
+                // el costo de parseo del HTML sin necesidad (este reporte puede tener
+                // miles de filas), y era la causa principal de que la actualizacion
+                // se sintiera muy lenta.
+                Columnas = List.Transform({1..4}, each {"Columna" & Text.From(_), "td:nth-child(" & Text.From(_) & "), th:nth-child(" & Text.From(_) & ")"}),
                 Tabla = Html.Table(TextoHTML, Columnas, [RowSelector="tr"]),
 
                 Limpiar = (v as any) as text =>
@@ -56,27 +61,37 @@ let
                         c2 = Limpiar(Record.Field(r, "Columna3")),
                         c3 = Limpiar(Record.Field(r, "Columna4")),
                         esActCod = c0 <> "" and EsCodigoActividad(c0),
-                        esCapitulo = esActCod and Text.EndsWith(c0, ".000"),
-                        tipoUMVacio = c2 = "" and c3 = ""
+                        esCapitulo = esActCod and Text.EndsWith(c0, ".000")
                     in
+                        // El chequeo de Insumo (Tipo+UM llenos) va PRIMERO: los
+                        // codigos de insumo normalmente NO tienen punto (ej "4436"),
+                        // por eso antes se colaban en el "else if not esActCod then
+                        // Otro" y se perdian, dejando el UM de la Actividad sin poder
+                        // encontrarse (siempre devolvia null).
                         if c0 = "" or c0 = "Cod" or Text.StartsWith(c0, "SubCapitulo") then "Otro"
+                        else if c2 <> "" and c3 <> "" then "Insumo"
                         else if not esActCod then "Otro"
-                        else if esCapitulo and tipoUMVacio then "Capitulo"
-                        else if tipoUMVacio then "Actividad"
-                        else "Insumo",
+                        else if esCapitulo then "Capitulo"
+                        else "Actividad",
                     type text),
 
                 ConCapituloRaw = Table.AddColumn(Clasificado, "CapituloRaw", each if [Clase] = "Capitulo" then Limpiar([Columna2]) else null, type text),
                 ConCapituloFD = Table.FillDown(ConCapituloRaw, {"CapituloRaw"}),
                 TablaCompleta = Table.Buffer(ConCapituloFD),
 
+                TotalFilas = Table.RowCount(TablaCompleta),
                 BuscarUM = (indiceActividad as number) as nullable text =>
                     let
-                        ventana = Table.SelectRows(TablaCompleta, each [IndiceFila] > indiceActividad and [IndiceFila] <= indiceActividad + 8),
-                        limiteFila = Table.SelectRows(ventana, each [Clase] = "Actividad" or [Clase] = "Capitulo"),
-                        limiteIdx = if Table.RowCount(limiteFila) = 0 then indiceActividad + 8 else List.Min(limiteFila[IndiceFila]),
-                        insumosValidos = Table.SelectRows(ventana, each [Clase] = "Insumo" and [IndiceFila] < limiteIdx),
-                        um = if Table.RowCount(insumosValidos) = 0 then null else Limpiar(insumosValidos{0}[Columna4])
+                        // Table.Range es una lectura posicional directa (rapida), a
+                        // diferencia de Table.SelectRows que evalua un predicado fila
+                        // por fila. Como IndiceFila es secuencial 0-based, la ventana
+                        // de las siguientes 8 filas empieza justo en indiceActividad+1.
+                        largoVentana = List.Min({8, TotalFilas - indiceActividad - 1}),
+                        ventana = if largoVentana <= 0 then #table({"Clase","Columna4"}, {}) else Table.Range(TablaCompleta, indiceActividad + 1, largoVentana),
+                        primerInsumo = List.PositionOf(ventana[Clase], "Insumo"),
+                        candidatosLimite = List.Select({List.PositionOf(ventana[Clase], "Actividad"), List.PositionOf(ventana[Clase], "Capitulo")}, each _ >= 0),
+                        primerLimite = if List.IsEmpty(candidatosLimite) then -1 else List.Min(candidatosLimite),
+                        um = if primerInsumo < 0 or (primerLimite >= 0 and primerInsumo > primerLimite) then null else Limpiar(ventana[Columna4]{primerInsumo})
                     in um,
 
                 SoloActividades = Table.SelectRows(TablaCompleta, each [Clase] = "Actividad"),
