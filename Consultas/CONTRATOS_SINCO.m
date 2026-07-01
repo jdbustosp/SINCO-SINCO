@@ -346,7 +346,18 @@ let
 
     // ===== 7. Separar nombre/UM y armar columnas finales =====
     AddSepGrupo = Table.AddColumn(AddInsumoTxt, "_SepGrupo", each FnSepararUM([ActividadTxt]), type record),
-    AddSepInsumo = Table.AddColumn(AddSepGrupo, "_SepInsumo", each FnSepararUM([InsumoTxt]), type record),
+    // El nombre "oficial" (Ref.InsOficial, cruzado desde SEGUIMIENTO) a veces no
+    // trae "(UM)" porque esa fila de Seguimiento no tenia UM diligenciado. En ese
+    // caso se intenta sacar la UM del texto crudo del insumo en el contrato
+    // (Columna2), que a veces si trae el "(UM)" aunque el oficial no lo tenga.
+    AddSepInsumo = Table.AddColumn(AddSepGrupo, "_SepInsumo", each
+        let
+            deOficial = FnSepararUM([InsumoTxt]),
+            deCrudo = FnSepararUM(if [Columna2] = null then "" else Text.From([Columna2])),
+            umFinal = if deOficial[UM] <> null and Text.Trim(deOficial[UM]) <> "" then deOficial[UM] else deCrudo[UM]
+        in
+            [Nombre = deOficial[Nombre], UM = umFinal],
+    type record),
 
     AddFinal = Table.AddColumn(AddSepInsumo, "_Final", each [
         Grupo = FnQuitarTildes([_SepGrupo][Nombre]),
@@ -387,14 +398,53 @@ let
     JoinPrev = Table.NestedJoin(AddKey, {"__Key"}, PrevKeys, {"__Key"}, "Prev", JoinKind.LeftAnti),
     SinClave = Table.RemoveColumns(JoinPrev, {"__Key"}, MissingField.Ignore),
 
-    // ===== 9. Columnas finales de la tabla CONTRATOS =====
-    AddEC = Table.AddColumn(SinClave, "Estado Contrato", each "PENDIENTE", type text),
-    AddEG = Table.AddColumn(AddEC, "Estado Grupo", each "PENDIENTE", type text),
-    AddED = Table.AddColumn(AddEG, "Estado Detalle", each "PENDIENTE", type text),
-    AddFH = Table.AddColumn(AddED, "Fecha Hora", each null, type nullable datetime),
-    AddErr = Table.AddColumn(AddFH, "Error", each null, type nullable text),
+    // ===== 9. Recuperar el estado anterior de la MISMA hoja CONTRATOS =====
+    // Sin esto, cada "Actualizar todo" reiniciaria Estado Contrato/Grupo/Detalle
+    // a "PENDIENTE" para TODO, borrando el progreso que el flujo RPA ya habia
+    // marcado como "OK" y haciendo que se intente crear de nuevo lo que ya
+    // existe. Se lee el contenido actual de la hoja antes de este refresh (via
+    // un rango con nombre, no una Tabla nativa - una Tabla no es compatible con
+    // un rango controlado por una conexion externa), se conserva el Estado de
+    // las filas que ya existian, y se excluyen las que ya quedaron con Detalle
+    // en "OK" (registro completo), igual que se hizo para ACTIVIDADES_NUEVAS.
+    RangoPrevio = try Excel.CurrentWorkbook(){[Name="RangoContratos"]}[Content] otherwise null,
+    ColsEsperadas = {"Cod Contrato","Grupo","Insumo","Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"},
+    EstadoPrevioTabla =
+        if RangoPrevio = null or Table.RowCount(RangoPrevio) = 0 then
+            #table(ColsEsperadas, {})
+        else
+            let
+                Promovido = Table.PromoteHeaders(RangoPrevio, [PromoteAllScalars=true]),
+                ColsOk = if List.Contains(Table.ColumnNames(Promovido), "Cod Contrato") then Promovido else #table(ColsEsperadas, {}),
+                SoloConDatos = Table.SelectRows(ColsOk, each [#"Cod Contrato"] <> null and Text.Trim(Text.From([#"Cod Contrato"])) <> "")
+            in
+                SoloConDatos,
+    EstadoPrevioConClave = Table.AddColumn(EstadoPrevioTabla, "__KeyEstado", each
+        Text.Trim(Text.Upper(Text.From([#"Cod Contrato"]))) & "|" & Text.Trim(Text.Upper(Text.From([Grupo]))) & "|" & Text.Trim(Text.Upper(Text.From([Insumo]))),
+    type text),
+    EstadoPrevioSolo = Table.Distinct(Table.SelectColumns(EstadoPrevioConClave, {"__KeyEstado","Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"}), {"__KeyEstado"}),
 
-    Resultado = Table.SelectColumns(AddErr, {
+    ConClaveEstado = Table.AddColumn(SinClave, "__KeyEstado", each
+        Text.Trim(Text.Upper(Text.From([#"Cod Contrato"]))) & "|" & Text.Trim(Text.Upper(Text.From([Grupo]))) & "|" & Text.Trim(Text.Upper(Text.From([Insumo]))),
+    type text),
+    ConEstadoPrevio = Table.NestedJoin(ConClaveEstado, {"__KeyEstado"}, EstadoPrevioSolo, {"__KeyEstado"}, "Prev", JoinKind.LeftOuter),
+    ExpandPrev = Table.ExpandTableColumn(ConEstadoPrevio, "Prev", {"Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"}, {"EstadoContratoPrev","EstadoGrupoPrev","EstadoDetallePrev","FechaHoraPrev","ErrorPrev"}),
+
+    // Excluir filas cuyo Detalle ya quedo "OK" (registro completo en SINCO)
+    SinCompletados = Table.SelectRows(ExpandPrev, each
+        [EstadoDetallePrev] = null or not Text.StartsWith(Text.Upper(Text.Trim(Text.From([EstadoDetallePrev]))), "OK")
+    ),
+
+    // ===== 10. Columnas finales de la tabla CONTRATOS =====
+    AddEC = Table.AddColumn(SinCompletados, "Estado Contrato", each if [EstadoContratoPrev] <> null then [EstadoContratoPrev] else "PENDIENTE", type text),
+    AddEG = Table.AddColumn(AddEC, "Estado Grupo", each if [EstadoGrupoPrev] <> null then [EstadoGrupoPrev] else "PENDIENTE", type text),
+    AddED = Table.AddColumn(AddEG, "Estado Detalle", each if [EstadoDetallePrev] <> null then [EstadoDetallePrev] else "PENDIENTE", type text),
+    AddFH = Table.AddColumn(AddED, "Fecha Hora", each if [FechaHoraPrev] = null then null else (try DateTime.From([FechaHoraPrev]) otherwise [FechaHoraPrev])),
+    AddErr = Table.AddColumn(AddFH, "Error", each [ErrorPrev]),
+
+    Limpieza = Table.RemoveColumns(AddErr, {"__KeyEstado","EstadoContratoPrev","EstadoGrupoPrev","EstadoDetallePrev","FechaHoraPrev","ErrorPrev"}, MissingField.Ignore),
+
+    Resultado = Table.SelectColumns(Limpieza, {
         "Cod Contrato","Descripcion","Grupo","UMGrupo","CantidadGrupo","Insumo","UMInsumo","ValorUnitarioInsumo",
         "Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"
     }),
