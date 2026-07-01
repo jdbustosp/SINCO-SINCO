@@ -320,18 +320,18 @@ let
             ),
             AddClave = Table.AddColumn(Filtered, "InsClave_Cruce", each FnClaveLimpia([Columna2]), type text),
 
-            Seleccionado = Table.SelectColumns(AddClave, {"Cod Contrato","Descripcion contrato","Nombre Contratista","CodigoAct","Columna2","InsClave_Cruce","Cantidad Contratado","VT Contratado"})
+            Seleccionado = Table.SelectColumns(AddClave, {"Cod Contrato","Descripcion contrato","Nombre Contratista","CodigoAct","Columna2","Columna3","InsClave_Cruce","Cantidad Contratado","VT Contratado"})
         in Seleccionado,
 
     FnContratosCC = (cc as text) as table =>
         let
             sub = Table.SelectRows(ArchivosActual, each [Centro de Costos] = cc),
             bin = FnPickLatest(sub, "ESTADO DE CONTRATOS"),
-            datos = if bin = null then #table({"Cod Contrato","Descripcion contrato","Nombre Contratista","CodigoAct","Columna2","InsClave_Cruce","Cantidad Contratado","VT Contratado"}, {}) else FxParsearContratos(bin),
+            datos = if bin = null then #table({"Cod Contrato","Descripcion contrato","Nombre Contratista","CodigoAct","Columna2","Columna3","InsClave_Cruce","Cantidad Contratado","VT Contratado"}, {}) else FxParsearContratos(bin),
             conCC = Table.AddColumn(datos, "Centro de Costos", each cc, type text)
         in conCC,
 
-    Contratos = Table.Buffer(if List.Count(Centros) = 0 then #table({"Cod Contrato","Descripcion contrato","Nombre Contratista","CodigoAct","Columna2","InsClave_Cruce","Cantidad Contratado","VT Contratado","Centro de Costos"},{}) else Table.Combine(List.Transform(Centros, each FnContratosCC(_)))),
+    Contratos = Table.Buffer(if List.Count(Centros) = 0 then #table({"Cod Contrato","Descripcion contrato","Nombre Contratista","CodigoAct","Columna2","Columna3","InsClave_Cruce","Cantidad Contratado","VT Contratado","Centro de Costos"},{}) else Table.Combine(List.Transform(Centros, each FnContratosCC(_)))),
     ContratosValidos = Table.SelectRows(Contratos, each [Cod Contrato] <> null and [VT Contratado] <> null and [VT Contratado] <> 0),
 
     // ===== 6. Enriquecer con Actividad(+UM) e Insumo oficial(+UM) =====
@@ -346,15 +346,16 @@ let
 
     // ===== 7. Separar nombre/UM y armar columnas finales =====
     AddSepGrupo = Table.AddColumn(AddInsumoTxt, "_SepGrupo", each FnSepararUM([ActividadTxt]), type record),
-    // El nombre "oficial" (Ref.InsOficial, cruzado desde SEGUIMIENTO) a veces no
-    // trae "(UM)" porque esa fila de Seguimiento no tenia UM diligenciado. En ese
-    // caso se intenta sacar la UM del texto crudo del insumo en el contrato
-    // (Columna2), que a veces si trae el "(UM)" aunque el oficial no lo tenga.
+    // El reporte "ESTADO DE CONTRATOS" trae la UM del insumo en su propia
+    // columna (Columna3), separada de la descripcion - no hay que adivinarla
+    // de un "(UM)" dentro del texto. Se usa esa columna directamente; el
+    // nombre "oficial" cruzado desde SEGUIMIENTO (InsumoTxt) solo se usa para
+    // limpiar el nombre visible (por si trae su propio "(UM)" embebido).
     AddSepInsumo = Table.AddColumn(AddSepGrupo, "_SepInsumo", each
         let
             deOficial = FnSepararUM([InsumoTxt]),
-            deCrudo = FnSepararUM(if [Columna2] = null then "" else Text.From([Columna2])),
-            umFinal = if deOficial[UM] <> null and Text.Trim(deOficial[UM]) <> "" then deOficial[UM] else deCrudo[UM]
+            umDirecta = if [Columna3] = null then null else (let t = Text.Trim(Text.From([Columna3])) in if t = "" then null else t),
+            umFinal = if umDirecta <> null then umDirecta else deOficial[UM]
         in
             [Nombre = deOficial[Nombre], UM = umFinal],
     type record),
