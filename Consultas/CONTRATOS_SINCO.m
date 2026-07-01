@@ -397,7 +397,10 @@ let
 
     PrevKeys = Table.Distinct(if FechaVersion = "" or List.Count(Centros) = 0 then #table({"__Key"}, {}) else Table.Combine(List.Transform(Centros, each FnKeysPrevCC(_)))),
     JoinPrev = Table.NestedJoin(AddKey, {"__Key"}, PrevKeys, {"__Key"}, "Prev", JoinKind.LeftAnti),
-    SinClave = Table.RemoveColumns(JoinPrev, {"__Key"}, MissingField.Ignore),
+    // "Prev" queda con tablas anidadas vacias (asi funciona LeftAnti) y no se
+    // usa para nada mas alla de este punto - hay que quitarla aqui, si no
+    // choca con el "Prev" que se agrega mas abajo al leer el Estado anterior.
+    SinClave = Table.RemoveColumns(JoinPrev, {"__Key", "Prev"}, MissingField.Ignore),
 
     // ===== 9. Recuperar el estado anterior de la MISMA hoja CONTRATOS =====
     // Sin esto, cada "Actualizar todo" reiniciaria Estado Contrato/Grupo/Detalle
@@ -428,8 +431,8 @@ let
     ConClaveEstado = Table.AddColumn(SinClave, "__KeyEstado", each
         Text.Trim(Text.Upper(Text.From([#"Cod Contrato"]))) & "|" & Text.Trim(Text.Upper(Text.From([Grupo]))) & "|" & Text.Trim(Text.Upper(Text.From([Insumo]))),
     type text),
-    ConEstadoPrevio = Table.NestedJoin(ConClaveEstado, {"__KeyEstado"}, EstadoPrevioSolo, {"__KeyEstado"}, "Prev", JoinKind.LeftOuter),
-    ExpandPrev = Table.ExpandTableColumn(ConEstadoPrevio, "Prev", {"Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"}, {"EstadoContratoPrev","EstadoGrupoPrev","EstadoDetallePrev","FechaHoraPrev","ErrorPrev"}),
+    ConEstadoPrevio = Table.NestedJoin(ConClaveEstado, {"__KeyEstado"}, EstadoPrevioSolo, {"__KeyEstado"}, "PrevEstado", JoinKind.LeftOuter),
+    ExpandPrev = Table.ExpandTableColumn(ConEstadoPrevio, "PrevEstado", {"Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"}, {"EstadoContratoPrev","EstadoGrupoPrev","EstadoDetallePrev","FechaHoraPrev","ErrorPrev"}),
 
     // Excluir filas cuyo Detalle ya quedo "OK" (registro completo en SINCO)
     SinCompletados = Table.SelectRows(ExpandPrev, each
