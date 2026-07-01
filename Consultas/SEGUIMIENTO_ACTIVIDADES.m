@@ -1,15 +1,19 @@
 // SEGUIMIENTO_ACTIVIDADES
 // Parsea "SEGUIMIENTO POR ITEMS" y devuelve solo las filas de tipo Actividad
-// (Codigo, Descripcion, UM, Capitulo padre), para el Centro de Costos actual.
+// (Codigo, Descripcion, UM, Capitulo, Subcapitulo padre), para el Centro de
+// Costos actual.
 //
 // Clasificacion de filas (columnas: Cod, Descripcion, Tipo, UM, ...):
-//   - Capitulo:  codigo termina en ".000" y Tipo/UM vienen vacios
-//   - Actividad: codigo tiene forma N.NNN (no .000) y Tipo/UM vienen vacios
-//   - Insumo:    Tipo y UM SI vienen llenos (ej "M"/"M3", "O"/"Un")
-//   - SubCapitulo / vacias / encabezados: se ignoran
+//   - Capitulo:     codigo termina en ".000" y Tipo/UM vienen vacios
+//   - SubCapitulo:  fila con texto "SubCapitulo :NOMBRE" en la primera columna
+//   - Actividad:    codigo tiene forma N.NNN (no .000) y Tipo/UM vienen vacios
+//   - Insumo:       Tipo y UM SI vienen llenos (ej "M"/"M3", "O"/"Un")
+//   - vacias / encabezados: se ignoran
 //
 // El UM de una Actividad no viene en su propia fila (siempre esta vacio ahi),
 // asi que se toma del primer Insumo que aparece inmediatamente despues de ella.
+// El Subcapitulo se reinicia (vuelve a quedar vacio) cada vez que empieza un
+// Capitulo nuevo, para no arrastrar el subcapitulo de un capitulo anterior.
 let
     SiteUrl = "https://colsubsidio365.sharepoint.com/sites/MiGerenciaViv",
     Headers = [Accept="application/json;odata=nometadata"],
@@ -21,7 +25,7 @@ let
 
     Resultado =
         if Table.RowCount(Ordenadas) = 0 then
-            #table(type table[Codigo=text, Descripcion=text, UM=text, Capitulo=text], {})
+            #table(type table[Codigo=text, Descripcion=text, UM=text, Capitulo=text, Subcapitulo=text], {})
         else
             let
                 Binario = Binary.Buffer(Web.Contents(SiteUrl, [
@@ -77,7 +81,21 @@ let
 
                 ConCapituloRaw = Table.AddColumn(Clasificado, "CapituloRaw", each if [Clase] = "Capitulo" then Limpiar([Columna2]) else null, type text),
                 ConCapituloFD = Table.FillDown(ConCapituloRaw, {"CapituloRaw"}),
-                TablaCompleta = Table.Buffer(ConCapituloFD),
+
+                // Subcapitulo: se marca "" (no null) en cada fila de Capitulo para
+                // reiniciar el relleno hacia abajo justo ahi, y se toma el nombre
+                // de las filas "SubCapitulo :NOMBRE" hasta el proximo reinicio.
+                ConSubRaw = Table.AddColumn(ConCapituloFD, "SubRaw", each
+                    if [Clase] = "Capitulo" then ""
+                    else
+                        let c0 = Limpiar([Columna1]) in
+                        if Text.StartsWith(c0, "SubCapitulo") then
+                            let pos = Text.PositionOf(c0, ":") in if pos >= 0 then Text.Trim(Text.Range(c0, pos + 1)) else null
+                        else null,
+                type text),
+                ConSubFD = Table.FillDown(ConSubRaw, {"SubRaw"}),
+                ConSubFinal = Table.TransformColumns(ConSubFD, {"SubRaw", each if _ = "" then null else _, type text}),
+                TablaCompleta = Table.Buffer(ConSubFinal),
 
                 TotalFilas = Table.RowCount(TablaCompleta),
                 BuscarUM = (indiceActividad as number) as nullable text =>
@@ -99,9 +117,9 @@ let
                 ConCodigoLimpio = Table.AddColumn(ConUM, "Codigo", each Limpiar([Columna1]), type text),
                 ConDescLimpia = Table.AddColumn(ConCodigoLimpio, "Descripcion", each Limpiar([Columna2]), type text),
 
-                Final = Table.SelectColumns(ConDescLimpia, {"Codigo", "Descripcion", "UM", "CapituloRaw"}),
-                Renombrado = Table.RenameColumns(Final, {{"CapituloRaw", "Capitulo"}}),
-                Tipado = Table.TransformColumnTypes(Renombrado, {{"Codigo", type text}, {"Descripcion", type text}, {"UM", type text}, {"Capitulo", type text}})
+                Final = Table.SelectColumns(ConDescLimpia, {"Codigo", "Descripcion", "UM", "CapituloRaw", "SubRaw"}),
+                Renombrado = Table.RenameColumns(Final, {{"CapituloRaw", "Capitulo"}, {"SubRaw", "Subcapitulo"}}),
+                Tipado = Table.TransformColumnTypes(Renombrado, {{"Codigo", type text}, {"Descripcion", type text}, {"UM", type text}, {"Capitulo", type text}, {"Subcapitulo", type text}})
             in
                 Tipado
 in
