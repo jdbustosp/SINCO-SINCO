@@ -175,13 +175,20 @@ let
         in if path = null then null else FnReadSPBinary(path),
 
     // ===== 4. Tabla maestra de Actividad(+UM)/Capitulo/Insumo oficial(+UM) =====
-    Columnas_HTML25 = FnBuildColumnas(25),
+    // Pedir a Html.Table solo las columnas que realmente se usan: el reporte
+    // de SEGUIMIENTO pesa ~6 MB y el de CONTRATOS ~3 MB, y cada columna extra
+    // multiplica el costo del parseo. Del seguimiento solo se leen las 4
+    // primeras (Cod/Descripcion/Tipo/UM); del estado de contratos las 6
+    // primeras (texto del contrato en la 1, insumo en la 2, UM en la 3,
+    // cantidad en la 4, VT en la 5).
+    Columnas_HTML4 = FnBuildColumnas(4),
+    Columnas_HTML6 = FnBuildColumnas(6),
     Columnas_APU = FnBuildColumnas(3),
 
     FxProcesarCentroCosto = (BinarioSeguimiento as binary, BinarioPresupuesto as binary) as table =>
         let
             OrigenItems = try Excel.Workbook(BinarioSeguimiento, null, true){0}[Data]
-                          otherwise Html.Table(Text.FromBinary(BinarioSeguimiento, 1252), Columnas_HTML25, [RowSelector="tr"]),
+                          otherwise Html.Table(Text.FromBinary(BinarioSeguimiento, 1252), Columnas_HTML4, [RowSelector="tr"]),
             ItemsPrepared = Table.Buffer(FnPrepareTableWithHeader(OrigenItems)),
 
             ItemsColNames = Table.ColumnNames(ItemsPrepared),
@@ -295,7 +302,7 @@ let
     FxParsearContratos = (binario as binary) as table =>
         let
             Source_Raw = try Excel.Workbook(binario, null, true){0}[Data]
-                     otherwise Html.Table(Text.FromBinary(binario, 1252), Columnas_HTML25, [RowSelector="tr"]),
+                     otherwise Html.Table(Text.FromBinary(binario, 1252), Columnas_HTML6, [RowSelector="tr"]),
             Source_ColNames = Table.ColumnNames(Source_Raw),
             Source = Table.RenameColumns(Source_Raw, List.Zip({Source_ColNames, List.Transform({1..List.Count(Source_ColNames)}, each "Columna" & Text.From(_))})),
 
@@ -387,7 +394,7 @@ let
             bin = FnPickLatest(tbl, "ESTADO DE CONTRATOS"),
             tbl0 = if bin = null then #table({"FilaTexto"}, {}) else
                 let
-                    Source_Raw = try Excel.Workbook(bin, null, true){0}[Data] otherwise Html.Table(Text.FromBinary(bin, 1252), Columnas_HTML25, [RowSelector="tr"]),
+                    Source_Raw = try Excel.Workbook(bin, null, true){0}[Data] otherwise Html.Table(Text.FromBinary(bin, 1252), Columnas_HTML6, [RowSelector="tr"]),
                     withText = Table.AddColumn(Source_Raw, "FilaTexto", each Text.Combine(List.Transform(List.Select(Record.FieldValues(_), each _ <> null and _ <> ""), Text.From), " "), type text)
                 in Table.SelectColumns(withText, {"FilaTexto"}),
             rows = Table.AddColumn(tbl0, "Contrato", each if Text.Contains(Text.Upper([FilaTexto]), "CONTRATO NO") then let after = Text.Range([FilaTexto], Text.PositionOf(Text.Upper([FilaTexto]), "CONTRATO NO") + 11) in FnDigits(Text.BeforeDelimiter(Text.TrimStart(after, {".",":"," "}), " ")) else null, type text),
