@@ -113,7 +113,9 @@ let
     Base = Table.AddColumn(ConCrear, "__Fila", each [
         ACTIVIDADES = [ActCod] & " - " & [ActDesc],
         INSUMOS = [InsDesc],
-        TIPO = [Tipo],
+        // Tipos validos del Maestro Tipos Insumos del SINCO destino; lo que
+        // no exista alli (A, C, F, V, minusculas...) se mapea a "Y" (POR CLASIFICAR)
+        TIPO = let t = Text.Upper(Text.Trim([Tipo])) in if List.Contains({"E","I","O","M","N","Z","Y","P","S","T","X"}, t) then t else "Y",
         UM = [UM],
         GRUPO = "OTROS",
         ITEM = [ActCod]

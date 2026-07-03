@@ -179,7 +179,18 @@ let
     JoinSeguimiento = Table.NestedJoin(ReordenadoLlave, {"LlaveInsumo"}, DiccionarioSeguimiento, {"CodigoSeg"}, "SegGroup", JoinKind.LeftOuter),
     ExpandSeguimiento = Table.ExpandTableColumn(JoinSeguimiento, "SegGroup", {"TipoInsumoSeg"}, {"TipoInsumoSeg"}),
 
-    AddTipoInsumo = Table.AddColumn(ExpandSeguimiento, "Tipo Insumo", each if [Tipo] = "Insumo" then (if [TipoInsumoSeg] <> null and [TipoInsumoSeg] <> "" then Text.Upper(Text.Trim([TipoInsumoSeg])) else "S") else null),
+    // Tipos validos en el Maestro Tipos Insumos del SINCO destino. Cualquier
+    // tipo de la constructora que no exista alli (A, C, F, V, minusculas, etc.)
+    // hace fallar la importacion de la plantilla, asi que se mapea a
+    // "Y" (POR CLASIFICAR).
+    TiposValidos = {"E","I","O","M","N","Z","Y","P","S","T","X"},
+    AddTipoInsumo = Table.AddColumn(ExpandSeguimiento, "Tipo Insumo", each
+        if [Tipo] = "Insumo" then
+            let
+                crudo = if [TipoInsumoSeg] <> null and [TipoInsumoSeg] <> "" then Text.Upper(Text.Trim([TipoInsumoSeg])) else "S"
+            in
+                if List.Contains(TiposValidos, crudo) then crudo else "Y"
+        else null),
     AddAgrupacion = Table.AddColumn(AddTipoInsumo, "Agrupacion", each if [Tipo] = "Insumo" then "OTROS" else null),
 
     FinalCols = Table.AddColumn(AddAgrupacion, "IVA", each null, type number),
