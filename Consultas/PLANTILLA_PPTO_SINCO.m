@@ -47,6 +47,37 @@ let
     DiccionarioSeguimiento = Table.Buffer(Table.Distinct(Table.SelectColumns(SegFiltro, {"CodigoSeg", "TipoInsumoSeg"}), {"CodigoSeg"})),
 
     // =========================================================
+    // 2b. MAPA ACTIVIDAD -> SUBCAPÍTULO
+    // El reporte de Analisis de Precios Unitarios NO trae el subcapitulo en
+    // ninguna parte, por eso antes se adivinaba por sufijo de texto contra
+    // una lista fija de nombres. El reporte de Seguimiento SI trae el
+    // marcador estructural de fila "SubCapitulo :X" (como ya pasa con
+    // Capitulo), asi que se extrae de ahi y se cruza por codigo de actividad.
+    // =========================================================
+    EsCodigoCapSeg = (c as text) as logical =>
+        let p = Text.Split(c, ".") in List.Count(p) = 2 and p{1} = "000" and (try Number.FromText(p{0}) otherwise null) <> null,
+    EsCodigoActSeg = (c as text) as logical =>
+        let p = Text.Split(c, ".") in List.Count(p) = 2 and p{1} <> "000" and Text.Length(p{1}) > 0 and (try Number.FromText(p{0}) otherwise null) <> null and (try Number.FromText(p{1}) otherwise null) <> null,
+
+    ClasSegSubcap = Table.AddColumn(TablaSegCruda, "ClaseSeg", each
+        let c0 = FxLimpiarCelda([Columna1])
+        in
+            if Text.StartsWith(c0, "SubCapitulo") then "SubCap"
+            else if EsCodigoCapSeg(c0) then "Capitulo"
+            else if EsCodigoActSeg(c0) then "Actividad"
+            else "Otro",
+        type text),
+    AddSubCapRaw = Table.AddColumn(ClasSegSubcap, "SubCapRaw", each
+        if [ClaseSeg] = "SubCap" then Text.Trim(Text.AfterDelimiter(FxLimpiarCelda([Columna1]), ":"))
+        else if [ClaseSeg] = "Capitulo" then ""
+        else null,
+        type text),
+    FillSubCap = Table.FillDown(AddSubCapRaw, {"SubCapRaw"}),
+    SoloActSeg = Table.SelectRows(FillSubCap, each [ClaseSeg] = "Actividad"),
+    ConCodActSeg = Table.AddColumn(SoloActSeg, "CodActSeg", each FxLimpiarCelda([Columna1]), type text),
+    MapaSubcapActividad = Table.Buffer(Table.Distinct(Table.SelectColumns(ConCodActSeg, {"CodActSeg", "SubCapRaw"}), {"CodActSeg"})),
+
+    // =========================================================
     // 3. EXTRACCIÓN DE LA BASE PRINCIPAL: "ANALISIS DE PRECIOS"
     // =========================================================
     BinarioAPU = FxGetBinary("ANALISIS DE PRECIOS UNITARIOS"),
@@ -124,23 +155,39 @@ let
     SoloValidos = Table.SelectRows(Expandido, each [Tipo] <> "Otro" and ([Código] <> null or [Tipo] = "Insumo")),
 
     // =========================================================
-    // 5. IDENTIFICAR SUBCAPÍTULO (SIN CORTAR EL NOMBRE)
+    // 5. IDENTIFICAR SUBCAPÍTULO (cruce estructural contra el mapa
+    // Actividad->Subcapitulo construido en 2b, por codigo de actividad).
+    // Respaldo: actividades presupuestadas que aun no tienen ejecucion
+    // registrada en Seguimiento (por eso no estan en el mapa) pero traen
+    // el subcapitulo como sufijo en su propio nombre; se compara contra
+    // TODOS los subcapitulos ya vistos en el proyecto (dinamico, no una
+    // lista fija de nombres).
     // =========================================================
-    ListaSubcaps = {"GENERALES", "TORRES", "SALÓN SOCIAL", "SALON SOCIAL", "TANQUE"},
+    SubcapsConocidos = List.Buffer(List.Distinct(List.RemoveNulls(List.Transform(
+        List.Select(MapaSubcapActividad[SubCapRaw], each _ <> null and Text.Trim(_) <> ""),
+        each Text.Trim(_)
+    )))),
 
-    ExtraccionSubcap = Table.AddColumn(SoloValidos, "DatosSubcap", each
-        if [Tipo] = "Actividad" then
-            let
-                descUpper = Text.Upper(if [Descripción] = null then "" else [Descripción]),
-                coincidencias = List.Select(ListaSubcaps, (s) => Text.EndsWith(descUpper, " " & s) or Text.EndsWith(descUpper, "-" & s)),
-                subcapEncontrado = if List.IsEmpty(coincidencias) then null else List.First(coincidencias)
-            in
-                [DescFinal = [Descripción], Subcap = subcapEncontrado] // AQUÍ DEJAMOS LA DESCRIPCIÓN INTACTA
-        else
-            [DescFinal = [Descripción], Subcap = null]
+    JoinSubcap = Table.NestedJoin(SoloValidos, {"Código"}, MapaSubcapActividad, {"CodActSeg"}, "SubcapGroup", JoinKind.LeftOuter),
+    ExpandSubcap = Table.ExpandTableColumn(JoinSubcap, "SubcapGroup", {"SubCapRaw"}, {"SubCapRaw"}),
+
+    ExtraccionSubcap = Table.AddColumn(ExpandSubcap, "DatosSubcap", each
+        [
+            DescFinal = [Descripción], // AQUÍ DEJAMOS LA DESCRIPCIÓN INTACTA
+            Subcap =
+                if [Tipo] <> "Actividad" then null
+                else if [SubCapRaw] <> null and Text.Trim([SubCapRaw]) <> "" then Text.Trim([SubCapRaw])
+                else
+                    let
+                        descUpper = Text.Upper(if [Descripción] = null then "" else [Descripción]),
+                        coincidencias = List.Select(SubcapsConocidos, (s) => Text.EndsWith(descUpper, " " & Text.Upper(s)) or Text.EndsWith(descUpper, "-" & Text.Upper(s))),
+                        masLargo = if List.IsEmpty(coincidencias) then null else List.Last(List.Sort(coincidencias, (a, b) => Text.Length(a) - Text.Length(b)))
+                    in
+                        masLargo
+        ]
     ),
 
-    ExpandidoSubcap = Table.ExpandRecordColumn(ExtraccionSubcap, "DatosSubcap", {"DescFinal", "Subcap"}),
+    ExpandidoSubcap = Table.RemoveColumns(Table.ExpandRecordColumn(ExtraccionSubcap, "DatosSubcap", {"DescFinal", "Subcap"}), {"SubCapRaw"}),
 
     // =========================================================
     // 6. LÓGICA DE PADRES Y JERARQUÍA
