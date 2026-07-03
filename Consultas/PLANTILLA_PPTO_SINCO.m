@@ -1,5 +1,21 @@
 let
     // =========================================================
+    // 0. DESPACHADOR POR ORIGEN
+    // La plantilla es la misma para todos los proyectos, pero los reportes
+    // fuente cambian: SINCO usa APU+Seguimiento; ORACLE (VERSALLES, MONGUI y
+    // futuros) usa CONTROL.xlsx+ASEGURADO.xls. Si el origen es ORACLE se
+    // delega a PLANTILLA_PPTO_ORACLE.m y ninguno de los pasos SINCO de este
+    // archivo se evalua (M es perezoso).
+    // =========================================================
+    OrigenActual = try Text.Upper(Text.Trim(Origen)) otherwise "SINCO",
+    PlantillaOracle = () =>
+        let
+            Url = "https://raw.githubusercontent.com/jdbustosp/SINCO-SINCO/main/Consultas/PLANTILLA_PPTO_ORACLE.m?cb=" & Number.ToText(Number.From(DateTime.LocalNow())),
+            Codigo = Text.FromBinary(Web.Contents(Url))
+        in
+            Expression.Evaluate(Codigo, #shared),
+
+    // =========================================================
     // 1. CONEXIÓN Y BÚSQUEDA SOBRE EL ÍNDICE DEL PROYECTO
     // =========================================================
     ParamProyecto = Text.Trim(ProyectoActual),
@@ -290,4 +306,4 @@ let
 
     SinHuerfanos = Table.SelectRows(TablaLimpia, each [Padre] <> null or [Código] = "CD")
 in
-    SinHuerfanos
+    if OrigenActual = "ORACLE" then PlantillaOracle() else SinHuerfanos
