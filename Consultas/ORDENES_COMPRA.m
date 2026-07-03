@@ -16,6 +16,12 @@
 // "Versiones previas/<fecha>". Preservacion de Estado: filas marcadas
 // "OK"/"Creado" en la hoja no se vuelven a proponer.
 let
+    // Un mismo archivo QUERY UNIFICADO sirve para cualquier proyecto: si el
+    // Origen es ORACLE este dominio aun no tiene equivalente implementado,
+    // asi que se devuelve la tabla vacia con el mismo esquema en vez de
+    // reventar el "Actualizar todo".
+    OrigenActual = try Text.Upper(Text.Trim(Origen)) otherwise "SINCO",
+    VacioOracle = #table({"Cod Orden","INSUMO","V/U","COMPRADO","CONSUMIDO","PRODUCTO","ITEM","CAPITULO","UM","Estado","Fecha Hora","Error"}, {}),
     ParamProyecto = Text.Trim(Text.From(ProyectoActual)),
     ParamCC = try Text.Trim(Text.From(CentroCostoActual)) otherwise "",
     FechaVersion = try Text.Trim(Text.From(FechaVersionComparar)) otherwise "",
@@ -150,4 +156,4 @@ let
     Final = Table.SelectColumns(SinHechas, ColsEsperadas),
     Orden = Table.Sort(Final, {{"Cod Orden", Order.Ascending}, {"ITEM", Order.Ascending}})
 in
-    Orden
+    if OrigenActual = "ORACLE" then VacioOracle else Orden

@@ -1,4 +1,11 @@
 let
+    // Un mismo archivo QUERY UNIFICADO sirve para cualquier proyecto: si el
+    // Origen es ORACLE este dominio aun no tiene equivalente implementado,
+    // asi que se devuelve la tabla vacia con el mismo esquema en vez de
+    // reventar el "Actualizar todo".
+    OrigenActual = try Text.Upper(Text.Trim(Origen)) otherwise "SINCO",
+    VacioOracle = #table({"Cod Contrato","Descripcion","Grupo","UM Grupo","Cantidad Grupo","Insumo","UM Insumo","Valor Unitario Insumo","Estado Contrato","Estado Grupo","Estado Detalle","Fecha Hora","Error"}, {}),
+
     // ===== 1. Parametros =====
     ParamProyecto = Text.Trim(Text.From(ProyectoActual)),
     ParamCC = try Text.Trim(Text.From(CentroCostoActual)) otherwise "",
@@ -463,4 +470,4 @@ let
         {"UMGrupo", "UM Grupo"}, {"CantidadGrupo", "Cantidad Grupo"}, {"UMInsumo", "UM Insumo"}, {"ValorUnitarioInsumo", "Valor Unitario Insumo"}
     })
 in
-    Renombrado
+    if OrigenActual = "ORACLE" then VacioOracle else Renombrado

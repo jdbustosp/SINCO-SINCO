@@ -9,6 +9,12 @@
 // hay en el APU?") no tenga que evaluar toda esa cadena pesada en cada
 // actualizacion.
 let
+    // Un mismo archivo QUERY UNIFICADO sirve para cualquier proyecto: si el
+    // Origen es ORACLE este dominio aun no tiene equivalente implementado,
+    // asi que se devuelve la tabla vacia con el mismo esquema en vez de
+    // reventar el "Actualizar todo".
+    OrigenActual = try Text.Upper(Text.Trim(Origen)) otherwise "SINCO",
+    VacioOracle = #table({"Codigo"}, {}),
     SiteUrl = "https://colsubsidio365.sharepoint.com/sites/MiGerenciaViv",
     Headers = [Accept="application/json;odata=nometadata"],
     FnEncode = F_Globales[FnEncode],
@@ -55,4 +61,4 @@ let
             in
                 Distintos
 in
-    Table.Buffer(Resultado)
+    if OrigenActual = "ORACLE" then VacioOracle else Table.Buffer(Resultado)

@@ -15,6 +15,12 @@
 // El Subcapitulo se reinicia (vuelve a quedar vacio) cada vez que empieza un
 // Capitulo nuevo, para no arrastrar el subcapitulo de un capitulo anterior.
 let
+    // Un mismo archivo QUERY UNIFICADO sirve para cualquier proyecto: si el
+    // Origen es ORACLE este dominio aun no tiene equivalente implementado,
+    // asi que se devuelve la tabla vacia con el mismo esquema en vez de
+    // reventar el "Actualizar todo".
+    OrigenActual = try Text.Upper(Text.Trim(Origen)) otherwise "SINCO",
+    VacioOracle = #table({"Codigo","Descripcion","UM","Capitulo","Subcapitulo"}, {}),
     SiteUrl = "https://colsubsidio365.sharepoint.com/sites/MiGerenciaViv",
     Headers = [Accept="application/json;odata=nometadata"],
     FnEncode = F_Globales[FnEncode],
@@ -123,4 +129,4 @@ let
             in
                 Tipado
 in
-    Table.Buffer(Resultado)
+    if OrigenActual = "ORACLE" then VacioOracle else Table.Buffer(Resultado)
