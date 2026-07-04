@@ -111,7 +111,10 @@ let
             Candidatas{0}[Data],
 
     BinControl = FxGetBinary("CONTROL"),
-    WbControl = Excel.Workbook(BinControl, null, true),
+    // InferSheetDimensions es OBLIGATORIO: el xlsx de BI Publisher declara la
+    // dimension rota (A1:D3) y sin esta opcion Power Query solo lee 3 filas
+    // del arbol (por eso "se comian" los niveles intermedios).
+    WbControl = Excel.Workbook(BinControl, [InferSheetDimensions = true, DelayTypes = true]),
     DataControl = FnHojaPrincipal(WbControl),
     ColsControl = Table.ColumnNames(DataControl),
     CtrlBase = Table.RenameColumns(DataControl, {{ColsControl{0}, "__Cod"}, {ColsControl{1}, "__Nom"}}),
@@ -180,14 +183,43 @@ let
     FnCodActividad = (cbs as text, paquete as text) as text =>
         if Record.FieldOrDefault(DictNumPaq, cbs, 1) > 1 and paquete <> "" then cbs & " - " & paquete else cbs,
 
+    // CANTIDAD de la actividad: en el reporte la Cantidad de cada insumo es
+    // la cantidad de la ACTIVIDAD repetida (ej. CONCRETO CICLOPEO: todos los
+    // insumos traen 22.46). Cuando todos los insumos comparten la cantidad,
+    // esa es la CANTIDAD de la actividad y los insumos quedan con Cant APU=1;
+    // si difieren (frecuente en VERSALLES), la actividad queda en 1 y cada
+    // insumo con su cantidad real. La matematica cierra igual en ambos casos:
+    // VrUnit actividad = suma(VrTotal insumos) / CANTIDAD.
+    FnModa = (l as list) as nullable text =>
+        let noVacios = List.Select(l, each _ <> null and _ <> "")
+        in
+            if List.IsEmpty(noVacios) then null
+            else List.First(List.Sort(List.Distinct(noVacios), (a, b) =>
+                Value.Compare(
+                    List.Count(List.Select(noVacios, (x) => x = b)),
+                    List.Count(List.Select(noVacios, (x) => x = a))
+                ))),
+
     ActividadesBase = Table.Group(Insumos, {"CodCBS", "Paquete"}, {
         {"DescCBS", each List.First(List.RemoveNulls([DescCBS]), null), type nullable text},
-        {"VrTotalAct", each List.Sum([VrTotal]), type nullable number}
+        {"VrTotalAct", each List.Sum([VrTotal]), type nullable number},
+        {"CantCompartida", each
+            let d = List.Distinct(List.Transform(List.RemoveNulls([Cantidad]), (c) => Number.Round(c, 4)))
+            in if List.Count(d) = 1 and d{0} <> 0 then d{0} else null,
+            type nullable number},
+        {"UMModa", each FnModa([UM]), type nullable text}
     }),
     Actividades = Table.Buffer(Table.AddColumn(ActividadesBase, "__Extra", each [
         CodAct = FnCodActividad([CodCBS], [Paquete]),
-        Padre = FnPadre([CodCBS])
+        Padre = FnPadre([CodCBS]),
+        CantAct = if [CantCompartida] <> null then [CantCompartida] else 1,
+        UMAct = if [CantCompartida] <> null and [UMModa] <> null then Text.Upper([UMModa]) else "GL"
     ])),
+    // cantidad de actividad por par (CBS|Paquete), para dividir los insumos
+    ListaQ = Table.TransformRows(Actividades, (r) => [K = r[CodCBS] & "|" & r[Paquete], Q = r[__Extra][CantAct]]),
+    DictQ = Record.FromList(List.Transform(ListaQ, each [Q]), List.Transform(ListaQ, each [K])),
+    FnCantAct = (cbs as text, paquete as text) as number =>
+        Record.FieldOrDefault(DictQ, cbs & "|" & paquete, 1),
 
     // =========================================================
     // 4. CAPITULOS: TODOS los ancestros usados por las actividades,
@@ -229,23 +261,32 @@ let
         Código = r[__Extra][CodAct],
         Descripción = (FnNombre(r[CodCBS]) ?? r[DescCBS]) & (if r[__Extra][CodAct] <> r[CodCBS] then " - " & r[Paquete] else ""),
         Padre = r[__Extra][Padre],
-        UM = "GL", CANTIDAD = 1, SUBCAPITULO = if r[Paquete] = "" then null else r[Paquete],
+        UM = r[__Extra][UMAct], CANTIDAD = r[__Extra][CantAct], SUBCAPITULO = if r[Paquete] = "" then null else r[Paquete],
         #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = null,
         Rend = null, IVA = null, VrUnitSinIVA = null, #"Tipo Insumo" = null,
         Agrupacion = null, #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
-        Tipo = "Actividad", #"Vr Unitario" = r[VrTotalAct], #"Vr Total" = r[VrTotalAct],
+        Tipo = "Actividad",
+        #"Vr Unitario" = if r[VrTotalAct] <> null then Number.Round(r[VrTotalAct] / r[__Extra][CantAct], 6) else null,
+        #"Vr Total" = r[VrTotalAct],
         __K1 = r[CodCBS], __K2 = r[Paquete], __K3 = 1, __K4 = ""
     ]),
     FilasInsumo = Table.TransformRows(Insumos, (r) =>
         let
-            vrUnit = if r[Cantidad] <> null and r[Cantidad] <> 0 and r[VrTotal] <> null then Number.Round(r[VrTotal] / r[Cantidad], 6) else r[VrTotal]
+            // cantidad de la actividad a la que pertenece este insumo
+            cantAct = FnCantAct(r[CodCBS], r[Paquete]),
+            // precio unitario real del articulo (la columna V.r Unitrio del reporte esta rota)
+            vrUnit = if r[Cantidad] <> null and r[Cantidad] <> 0 and r[VrTotal] <> null then Number.Round(r[VrTotal] / r[Cantidad], 6) else r[VrTotal],
+            // cantidad por unidad de actividad (=1 cuando todos comparten la cantidad)
+            cantApu = if r[Cantidad] <> null then Number.Round(r[Cantidad] / cantAct, 6) else null,
+            // aporte del insumo por unidad de actividad (suma = VrUnit de la actividad)
+            vrParcial = if r[VrTotal] <> null then Number.Round(r[VrTotal] / cantAct, 6) else null
         in [
             Código = null, Descripción = r[Articulo] & " - " & (r[DescArticulo] ?? ""), Padre = FnCodActividad(r[CodCBS], r[Paquete]),
             UM = if r[UM] = null or r[UM] = "" then null else Text.Upper(r[UM]), CANTIDAD = null, SUBCAPITULO = null,
-            #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = r[Cantidad],
+            #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = cantApu,
             Rend = null, IVA = null, VrUnitSinIVA = vrUnit, #"Tipo Insumo" = FnTipoInsumo(r[Articulo]),
             Agrupacion = "OTROS", #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
-            Tipo = "Insumo", #"Vr Unitario" = r[VrTotal], #"Vr Total" = null,
+            Tipo = "Insumo", #"Vr Unitario" = vrParcial, #"Vr Total" = null,
             __K1 = r[CodCBS], __K2 = r[Paquete], __K3 = 2, __K4 = r[Articulo]
         ]),
 
