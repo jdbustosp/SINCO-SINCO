@@ -229,18 +229,43 @@ let
     NodosArbol = List.Distinct(List.Combine(List.Transform(CbsUsados, FnAncestrosExistentes))),
 
     // =========================================================
-    // 5. TIPO INSUMO por prefijo de articulo (contra el maestro destino)
+    // 5. TIPO INSUMO y AGRUPACION desde el maestro INSUMOS_ORACLE.csv del
+    //    repo (clasificacion real validada con las plantillas que ya se
+    //    importaron: 507 insumos). Para insumos que no esten en el maestro,
+    //    respaldo por prefijo segun la distribucion real del maestro:
+    //    L->N (33/33), M->M (11/11), S->O (97/99), Z->S (174/207),
+    //    P->M (111/145), H->S (4/9); y agrupacion OTROS.
     // =========================================================
+    UrlMaestroIns = "https://raw.githubusercontent.com/jdbustosp/SINCO-SINCO/main/Datos/INSUMOS_ORACLE.csv?cb=" & Number.ToText(Number.From(DateTime.LocalNow())),
+    CsvMaestro = try Table.Skip(Csv.Document(Web.Contents(UrlMaestroIns), [Delimiter = ";", Columns = 4, Encoding = 65001, QuoteStyle = QuoteStyle.None]), 1)
+                 otherwise #table({"Column1", "Column2", "Column3", "Column4"}, {}),
+    MaestroDist = Table.Distinct(CsvMaestro, {"Column1"}),
+    DictTipoIns = Record.FromList(
+        List.Transform(Table.Column(MaestroDist, "Column2"), Text.Trim),
+        List.Transform(Table.Column(MaestroDist, "Column1"), Text.Trim)),
+    DictGrupoIns = Record.FromList(
+        List.Transform(Table.Column(MaestroDist, "Column4"), Text.Trim),
+        List.Transform(Table.Column(MaestroDist, "Column1"), Text.Trim)),
+
+    TiposValidos = {"E", "I", "O", "M", "N", "Z", "Y", "P", "S", "T", "X"},
     FnTipoInsumo = (articulo as text) as text =>
-        let p = Text.Upper(Text.Start(articulo, 1))
+        let
+            delMaestro = Record.FieldOrDefault(DictTipoIns, articulo, null),
+            p = Text.Upper(Text.Start(articulo, 1)),
+            heuristica =
+                if p = "L" then "N"
+                else if p = "M" then "M"
+                else if p = "P" then "M"
+                else if p = "S" then "O"
+                else if p = "Z" then "S"
+                else if p = "H" then "S"
+                else "Y",
+            t = if delMaestro <> null and delMaestro <> "" then Text.Upper(delMaestro) else heuristica
         in
-            if p = "H" then "E"        // equipos -> ALQUILER EQ. Y MAQ.
-            else if p = "L" then "N"   // laboral -> NOMINA DE OBRA
-            else if p = "M" then "M"   // materiales
-            else if p = "P" then "M"   // productos -> MATERIALES
-            else if p = "S" then "S"   // subcontratos
-            else if p = "Z" then "Z"   // otros
-            else "Y",                  // POR CLASIFICAR
+            if List.Contains(TiposValidos, t) then t else "Y",
+    FnGrupoInsumo = (articulo as text) as text =>
+        let g = Record.FieldOrDefault(DictGrupoIns, articulo, null)
+        in if g = null or g = "" then "OTROS" else g,
 
     // =========================================================
     // 6. ARMADO DE FILAS (mismas 21 columnas de la plantilla SINCO).
@@ -284,8 +309,8 @@ let
             Código = null, Descripción = r[Articulo] & " - " & (r[DescArticulo] ?? ""), Padre = FnCodActividad(r[CodCBS], r[Paquete]),
             UM = if r[UM] = null or r[UM] = "" then null else Text.Upper(r[UM]), CANTIDAD = null, SUBCAPITULO = null,
             #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = cantApu,
-            Rend = null, IVA = null, VrUnitSinIVA = vrUnit, #"Tipo Insumo" = FnTipoInsumo(r[Articulo]),
-            Agrupacion = "OTROS", #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
+            Rend = 1, IVA = 0, VrUnitSinIVA = vrUnit, #"Tipo Insumo" = FnTipoInsumo(r[Articulo]),
+            Agrupacion = FnGrupoInsumo(r[Articulo]), #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
             Tipo = "Insumo", #"Vr Unitario" = vrParcial, #"Vr Total" = null,
             __K1 = r[CodCBS], __K2 = r[Paquete], __K3 = 2, __K4 = r[Articulo]
         ]),
