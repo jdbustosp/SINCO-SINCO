@@ -72,7 +72,13 @@ let
             Text.Contains([FileName], "INFORME ENTRADAS DE ALMACÉN",   Comparer.OrdinalIgnoreCase) or
             Text.Contains([FileName], "MASIVO SALIDAS",                Comparer.OrdinalIgnoreCase) or
             Text.Contains([FileName], "ESTADO DE CONTRATOS",           Comparer.OrdinalIgnoreCase) or
-            Text.Contains([FileName], "DESCUENTOS",                    Comparer.OrdinalIgnoreCase)
+            Text.Contains([FileName], "DESCUENTOS",                    Comparer.OrdinalIgnoreCase) or
+            // reportes de proyectos con origen ORACLE (VERSALLES, MONGUI, ...)
+            Text.Contains([FileName], "ASEGURADO",                     Comparer.OrdinalIgnoreCase) or
+            Text.Contains([FileName], "CONTROL",                       Comparer.OrdinalIgnoreCase) or
+            Text.Contains([FileName], "COMPRAS",                       Comparer.OrdinalIgnoreCase) or
+            Text.Contains([FileName], "CONTRATOS.",                    Comparer.OrdinalIgnoreCase) or
+            Text.Contains([FileName], "ENTRADAS Y SALIDAS",            Comparer.OrdinalIgnoreCase)
         )
     ),
 
