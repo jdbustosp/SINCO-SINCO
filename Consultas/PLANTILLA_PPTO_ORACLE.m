@@ -94,7 +94,11 @@ let
                     else if tieneComa then Text.Replace(t, ",", ".")              // 22,46 -> 22.46
                     else t                                                        // 22.46 o 2246
             in
-                if limpio = null then null else try Number.FromText(limpio) otherwise null,
+                // cultura EXPLICITA en-US: "limpio" ya quedo normalizado con
+                // punto decimal; sin cultura, Number.FromText usa la del
+                // equipo (es-CO) donde el punto es separador de MILES y
+                // "22.46" se convierte en 2246
+                if limpio = null then null else try Number.FromText(limpio, "en-US") otherwise null,
 
     // ===== utilidades de jerarquia por segmentos =====
     EsSegCero = (s as text) as logical => Text.Select(s, {"0"}) = s and s <> "",
