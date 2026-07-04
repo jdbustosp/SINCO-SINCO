@@ -72,10 +72,29 @@ let
         let t = if v = null then "" else Text.From(v)
         in Text.Trim(Text.Replace(Text.Replace(Text.Replace(t, "#(lf)", " "), "#(cr)", " "), "#(00A0)", " ")),
 
+    // Los numeros del reporte vienen como TEXTO en formato espanol ("22,46",
+    // "$ 1.935.023,33"). Probar "en-US" primero corrompe los valores (22,46
+    // se vuelve 2246) y el simbolo $ hace fallar ambas culturas. Se limpia
+    // el texto y se decide el separador decimal por la POSICION del ultimo
+    // separador (si "," va despues de "." es decimal espanol y viceversa).
     FnNum = (v as any) as nullable number =>
         if v = null then null
         else if Value.Is(v, type number) then v
-        else try Number.FromText(Text.Trim(Text.From(v)), "en-US") otherwise try Number.FromText(Text.Trim(Text.From(v)), "es-ES") otherwise null,
+        else
+            let
+                t = Text.Select(Text.From(v), {"0".."9", ",", ".", "-"}),
+                tieneComa = Text.Contains(t, ","),
+                tienePunto = Text.Contains(t, "."),
+                limpio =
+                    if t = "" or t = "-" then null
+                    else if tieneComa and tienePunto then
+                        (if Text.PositionOf(t, ",", Occurrence.Last) > Text.PositionOf(t, ".", Occurrence.Last)
+                         then Text.Replace(Text.Replace(t, ".", ""), ",", ".")   // 1.935.023,33 -> 1935023.33
+                         else Text.Replace(t, ",", ""))                           // 1,935,023.33 -> 1935023.33
+                    else if tieneComa then Text.Replace(t, ",", ".")              // 22,46 -> 22.46
+                    else t                                                        // 22.46 o 2246
+            in
+                if limpio = null then null else try Number.FromText(limpio) otherwise null,
 
     // ===== utilidades de jerarquia por segmentos =====
     EsSegCero = (s as text) as logical => Text.Select(s, {"0"}) = s and s <> "",
