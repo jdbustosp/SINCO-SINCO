@@ -6,30 +6,38 @@
 //   CONTROL.xlsx  - arbol CBS/WBS completo del presupuesto (codigo + nombre).
 //                   El numero de niveles VARIA por proyecto (VERSALLES usa
 //                   codigos de 3 segmentos tipo 01-01-001; MONGUI de 6 tipo
-//                   A-10-10-30-3160-001), por eso toda la jerarquia se
-//                   resuelve de forma generica: un segmento "en ceros" marca
-//                   nivel no usado, y los ancestros de un codigo se generan
-//                   poniendo en ceros sus segmentos finales progresivamente.
+//                   A-10-10-30-3160-001). Se emiten TODOS los niveles del
+//                   arbol como capitulos anidados (Padre = su ancestro
+//                   existente mas profundo), de forma generica: un segmento
+//                   "en ceros" marca nivel no usado y los ancestros de un
+//                   codigo se generan poniendo en ceros sus segmentos
+//                   finales progresivamente.
 //                   OJO: el xlsx viene con la dimension declarada mal
 //                   (A1:D3); Power Query lee las celdas reales sin problema.
 //   ASEGURADO.xls - detalle plano por articulo (BIFF real, NO html). Las
 //                   filas con Proceso = PRESUPUESTO son el presupuesto de
-//                   construccion por articulo y CBS hoja. La columna
-//                   "V.r Unitrio" del reporte esta ROTA (trae una constante
-//                   identica en todas las filas), asi que el unitario se
-//                   calcula como V.r Total / Cantidad.
+//                   construccion por articulo, CBS hoja y Paquete de
+//                   Trabajo. La columna "V.r Unitrio" del reporte esta ROTA
+//                   (trae una constante identica en todas las filas), asi
+//                   que el unitario se calcula como V.r Total / Cantidad.
 //
-// Mapeo de jerarquia a la plantilla (que solo maneja Capitulo > Actividad
-// (+SUBCAPITULO) > Insumo):
-//   Capitulo    = ancestro de nivel 1 (solo el primer segmento no-cero)
-//   Actividad   = codigo CBS hoja que aparece en el PRESUPUESTO del asegurado
-//                 (CANTIDAD=1 y UM=GL: Oracle no maneja cantidad/UM de
-//                 actividad, los valores van en los articulos)
-//   SUBCAPITULO = ancestro intermedio MAS PROFUNDO que exista en CONTROL
-//                 (los niveles intermedios extra de proyectos como MONGUI
-//                 se saltan; queda el padre inmediato real)
-//   Insumo      = articulo agrupado por (CBS, Articulo) sumando Cantidad y
-//                 V.r Total (el reporte trae multiples registros uxer por par)
+// Mapeo a la plantilla:
+//   Capitulos   = TODOS los nodos ancestros del arbol CONTROL usados por las
+//                 actividades (anidados: nivel 1 cuelga de CD, cada nivel
+//                 inferior cuelga de su ancestro existente mas profundo).
+//   Actividad   = par (CBS hoja, Paquete de Trabajo). El PAQUETE DE TRABAJO
+//                 es el SUBCAPITULO (equivale a GENERALES/TORRES/etc. de los
+//                 proyectos SINCO, donde la misma actividad se repite por
+//                 subcapitulo). Como Oracle usa el MISMO codigo CBS en
+//                 varios paquetes y el Codigo de la plantilla debe ser
+//                 unico, el codigo de la actividad se sintetiza como
+//                 "CBS - PAQUETE" cuando el CBS tiene mas de un paquete
+//                 (si solo tiene uno, queda el CBS puro).
+//                 CANTIDAD=1 y UM=GL (Oracle no maneja cantidad/UM de
+//                 actividad; los valores van en los articulos).
+//   Insumo      = articulo agrupado por (CBS, Paquete, Articulo) sumando
+//                 Cantidad y V.r Total (el reporte trae multiples registros
+//                 uxer por par).
 //
 // Tipo Insumo por prefijo del codigo de articulo contra el Maestro Tipos
 // Insumos del SINCO destino: H=alquiler equipos->E, L=laboral->N (nomina),
@@ -56,7 +64,9 @@ let
                         RelativePath = "/_api/web/GetFileByServerRelativeUrl('" & FnEncode(Ordenadas{0}[ServerRelativeUrl]) & "')/$value",
                         Headers = Headers,
                         Timeout = #duration(0, 0, 5, 0)
-                    ])),
+                    ]))
+        in
+            Binario,
 
     Limpiar = (v as any) as text =>
         let t = if v = null then "" else Text.From(v)
@@ -69,12 +79,7 @@ let
 
     // ===== utilidades de jerarquia por segmentos =====
     EsSegCero = (s as text) as logical => Text.Select(s, {"0"}) = s and s <> "",
-    // codigo valido de CBS: al menos 2 segmentos separados por "-"
     EsCodigoCbs = (c as text) as logical => List.Count(Text.Split(c, "-")) >= 2,
-    // capitulo (nivel 1): primer segmento intacto, el resto en ceros del mismo ancho
-    FnCapitulo = (cod as text) as text =>
-        let segs = Text.Split(cod, "-")
-        in Text.Combine({segs{0}} & List.Transform(List.Skip(segs, 1), each Text.Repeat("0", Text.Length(_))), "-"),
     // candidatos a ancestro, del MAS PROFUNDO al mas superficial: para cada
     // posicion no-cero k (de atras hacia adelante, sin incluir la 0) se ponen
     // en ceros los segmentos desde k hasta el final
@@ -110,11 +115,18 @@ let
     DictCbs = Record.FromList(Table.Column(CtrlDistinct, "Nom"), Table.Column(CtrlDistinct, "Cod")),
     FnNombre = (cod as nullable text) as nullable text =>
         if cod = null then null else Record.FieldOrDefault(DictCbs, cod, null),
+    // ancestros que SI existen en el arbol, del mas profundo al mas superficial
+    FnAncestrosExistentes = (cod as text) as list =>
+        List.Select(FnAncestros(cod), (a) => a <> cod and Record.FieldOrDefault(DictCbs, a, null) <> null),
+    // padre = ancestro existente mas profundo; si no hay, CD
+    FnPadre = (cod as text) as text =>
+        let anc = FnAncestrosExistentes(cod)
+        in if List.IsEmpty(anc) then "CD" else List.First(anc),
 
     // =========================================================
     // 2. ASEGURADO: filas de PRESUPUESTO por articulo
     // Columnas posicionales (los encabezados traen "Descripción" duplicada):
-    //  1 CodProy 2 NombreProy 3 Paquete 4 CodCBS 5 DescCBS 6 Articulo
+    //  1 CodProy 2 NombreProy 3 PaqueteTrabajo 4 CodCBS 5 DescCBS 6 Articulo
     //  7 DescArticulo 8 UM 9 Proceso 10 Registro 11 Estado 12 Cantidad
     //  13 VrUnitario(ROTO) 14 VrTotal
     // =========================================================
@@ -127,6 +139,7 @@ let
         EsCodigoCbs(Limpiar(Record.Field(_, ColsAseg{3}))) and
         Limpiar(Record.Field(_, ColsAseg{5})) <> ""),
     AsegNorm = Table.FromRecords(Table.TransformRows(AsegFilas, (r) => [
+        Paquete = Limpiar(Record.Field(r, ColsAseg{2})),
         CodCBS = Limpiar(Record.Field(r, ColsAseg{3})),
         DescCBS = Limpiar(Record.Field(r, ColsAseg{4})),
         Articulo = Limpiar(Record.Field(r, ColsAseg{5})),
@@ -135,37 +148,43 @@ let
         Cantidad = FnNum(Record.Field(r, ColsAseg{11})),
         VrTotal = FnNum(Record.Field(r, ColsAseg{13}))
     ])),
-    // agrupar duplicados (multiples registros uxer por par CBS|Articulo)
-    AsegAgrupado = Table.Group(AsegNorm, {"CodCBS", "Articulo"}, {
+    // agrupar duplicados (multiples registros uxer por CBS|Paquete|Articulo)
+    Insumos = Table.Buffer(Table.Group(AsegNorm, {"CodCBS", "Paquete", "Articulo"}, {
         {"DescCBS", each List.First(List.RemoveNulls([DescCBS]), null), type nullable text},
         {"DescArticulo", each List.First(List.RemoveNulls([DescArticulo]), null), type nullable text},
         {"UM", each List.First(List.RemoveNulls([UM]), null), type nullable text},
         {"Cantidad", each List.Sum([Cantidad]), type nullable number},
         {"VrTotal", each List.Sum([VrTotal]), type nullable number}
-    }),
-    Insumos = Table.Buffer(AsegAgrupado),
+    })),
 
     // =========================================================
-    // 3. ACTIVIDADES: CBS hoja distintos del presupuesto, con su
-    //    capitulo y subcapitulo resueltos contra el arbol de CONTROL
+    // 3. ACTIVIDADES: par (CBS, Paquete de Trabajo). El paquete es el
+    //    SUBCAPITULO. Codigo sintetizado "CBS - PAQUETE" solo cuando el CBS
+    //    tiene mas de un paquete (para que el Codigo quede unico).
     // =========================================================
-    ActividadesBase = Table.Group(Insumos, {"CodCBS"}, {
+    PaquetesPorCbs = Table.Group(Insumos, {"CodCBS"}, {{"NumPaquetes", each List.Count(List.Distinct([Paquete])), Int64.Type}}),
+    DictNumPaq = Record.FromList(Table.Column(PaquetesPorCbs, "NumPaquetes"), Table.Column(PaquetesPorCbs, "CodCBS")),
+    FnCodActividad = (cbs as text, paquete as text) as text =>
+        if Record.FieldOrDefault(DictNumPaq, cbs, 1) > 1 and paquete <> "" then cbs & " - " & paquete else cbs,
+
+    ActividadesBase = Table.Group(Insumos, {"CodCBS", "Paquete"}, {
         {"DescCBS", each List.First(List.RemoveNulls([DescCBS]), null), type nullable text},
         {"VrTotalAct", each List.Sum([VrTotal]), type nullable number}
     }),
-    ActividadesResueltas = Table.AddColumn(ActividadesBase, "__Jerarquia", each
-        let
-            cap = FnCapitulo([CodCBS]),
-            ancExistentes = List.Select(FnAncestros([CodCBS]), (a) => a <> [CodCBS] and Record.FieldOrDefault(DictCbs, a, null) <> null),
-            subcapCod = if List.IsEmpty(ancExistentes) or List.First(ancExistentes) = cap then null else List.First(ancExistentes)
-        in
-            [Cap = cap, SubcapCod = subcapCod]),
-    Actividades = Table.Buffer(Table.ExpandRecordColumn(ActividadesResueltas, "__Jerarquia", {"Cap", "SubcapCod"})),
-
-    Capitulos = Table.Distinct(Table.SelectColumns(Actividades, {"Cap"})),
+    Actividades = Table.Buffer(Table.AddColumn(ActividadesBase, "__Extra", each [
+        CodAct = FnCodActividad([CodCBS], [Paquete]),
+        Padre = FnPadre([CodCBS])
+    ])),
 
     // =========================================================
-    // 4. TIPO INSUMO por prefijo de articulo (contra el maestro destino)
+    // 4. CAPITULOS: TODOS los ancestros usados por las actividades,
+    //    anidados (cada uno cuelga de su ancestro existente mas profundo)
+    // =========================================================
+    CbsUsados = List.Distinct(Table.Column(ActividadesBase, "CodCBS")),
+    NodosArbol = List.Distinct(List.Combine(List.Transform(CbsUsados, FnAncestrosExistentes))),
+
+    // =========================================================
+    // 5. TIPO INSUMO por prefijo de articulo (contra el maestro destino)
     // =========================================================
     FnTipoInsumo = (articulo as text) as text =>
         let p = Text.Upper(Text.Start(articulo, 1))
@@ -179,40 +198,42 @@ let
             else "Y",                  // POR CLASIFICAR
 
     // =========================================================
-    // 5. ARMADO DE FILAS (mismas 21 columnas de la plantilla SINCO).
-    //    Claves de orden para intercalar: capitulo -> actividad -> insumos
+    // 6. ARMADO DE FILAS (mismas 21 columnas de la plantilla SINCO).
+    //    El orden lexicografico de los codigos CBS ya pone cada ancestro
+    //    antes que sus hijos (los segmentos en ceros ordenan primero);
+    //    claves: (codigo nodo/CBS, paquete, tipoOrden, articulo)
     // =========================================================
-    FilasCapitulo = Table.TransformRows(Capitulos, (r) => [
-        Código = r[Cap], Descripción = FnNombre(r[Cap]) ?? r[Cap], Padre = "CD",
+    FilasCapitulo = List.Transform(NodosArbol, (nodo) => [
+        Código = nodo, Descripción = FnNombre(nodo) ?? nodo, Padre = FnPadre(nodo),
         UM = null, CANTIDAD = null, SUBCAPITULO = null,
         #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = null,
         Rend = null, IVA = null, VrUnitSinIVA = null, #"Tipo Insumo" = null,
         Agrupacion = null, #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
         Tipo = "Capítulo", #"Vr Unitario" = null, #"Vr Total" = null,
-        __K1 = r[Cap], __K2 = "", __K3 = 0, __K4 = ""
+        __K1 = nodo, __K2 = "", __K3 = 0, __K4 = ""
     ]),
     FilasActividad = Table.TransformRows(Actividades, (r) => [
-        Código = r[CodCBS], Descripción = FnNombre(r[CodCBS]) ?? r[DescCBS], Padre = r[Cap],
-        UM = "GL", CANTIDAD = 1, SUBCAPITULO = FnNombre(r[SubcapCod]),
+        Código = r[__Extra][CodAct],
+        Descripción = (FnNombre(r[CodCBS]) ?? r[DescCBS]) & (if r[__Extra][CodAct] <> r[CodCBS] then " - " & r[Paquete] else ""),
+        Padre = r[__Extra][Padre],
+        UM = "GL", CANTIDAD = 1, SUBCAPITULO = if r[Paquete] = "" then null else r[Paquete],
         #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = null,
         Rend = null, IVA = null, VrUnitSinIVA = null, #"Tipo Insumo" = null,
         Agrupacion = null, #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
         Tipo = "Actividad", #"Vr Unitario" = r[VrTotalAct], #"Vr Total" = r[VrTotalAct],
-        __K1 = r[Cap], __K2 = r[CodCBS], __K3 = 1, __K4 = ""
+        __K1 = r[CodCBS], __K2 = r[Paquete], __K3 = 1, __K4 = ""
     ]),
-    ActPorCod = Record.FromList(Table.TransformRows(Actividades, (r) => [Cap = r[Cap]]), Table.Column(Actividades, "CodCBS")),
     FilasInsumo = Table.TransformRows(Insumos, (r) =>
         let
-            cap = Record.FieldOrDefault(ActPorCod, r[CodCBS], [Cap = null])[Cap],
             vrUnit = if r[Cantidad] <> null and r[Cantidad] <> 0 and r[VrTotal] <> null then Number.Round(r[VrTotal] / r[Cantidad], 6) else r[VrTotal]
         in [
-            Código = null, Descripción = r[Articulo] & " - " & (r[DescArticulo] ?? ""), Padre = r[CodCBS],
+            Código = null, Descripción = r[Articulo] & " - " & (r[DescArticulo] ?? ""), Padre = FnCodActividad(r[CodCBS], r[Paquete]),
             UM = if r[UM] = null or r[UM] = "" then null else Text.Upper(r[UM]), CANTIDAD = null, SUBCAPITULO = null,
             #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = r[Cantidad],
             Rend = null, IVA = null, VrUnitSinIVA = vrUnit, #"Tipo Insumo" = FnTipoInsumo(r[Articulo]),
             Agrupacion = "OTROS", #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null,
             Tipo = "Insumo", #"Vr Unitario" = r[VrTotal], #"Vr Total" = null,
-            __K1 = cap, __K2 = r[CodCBS], __K3 = 2, __K4 = r[Articulo]
+            __K1 = r[CodCBS], __K2 = r[Paquete], __K3 = 2, __K4 = r[Articulo]
         ]),
 
     TodasLasFilas = Table.FromRecords(FilasCapitulo & FilasActividad & FilasInsumo),
@@ -220,7 +241,7 @@ let
     SinClaves = Table.RemoveColumns(Ordenada, {"__K1", "__K2", "__K3", "__K4"}),
 
     // =========================================================
-    // 6. FILA MAESTRA CD Y TIPOS (identico a la plantilla SINCO)
+    // 7. FILA MAESTRA CD Y TIPOS (identico a la plantilla SINCO)
     // =========================================================
     FilaCD = Table.FromRecords({[Código = "CD", Descripción = "COSTOS DIRECTOS", Padre = null, UM = null, CANTIDAD = null, SUBCAPITULO = null, #"ID PROYECTO" = null, VERSION = null, #"ID APU" = null, #"Cant APU" = null, Rend = null, IVA = null, VrUnitSinIVA = null, #"Tipo Insumo" = null, Agrupacion = null, #"COD CLIENTE" = null, #"Precio Cliente" = null, Clase = null, Tipo = "CD", #"Vr Unitario" = null, #"Vr Total" = null]}),
     TablaFinal = Table.Combine({FilaCD, SinClaves}),
