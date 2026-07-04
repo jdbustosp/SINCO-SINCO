@@ -96,10 +96,23 @@ let
     // =========================================================
     // 1. CONTROL: diccionario codigo -> nombre del arbol CBS
     // =========================================================
+    // Seleccion de hoja SIN asumir que la tabla de navegacion trae las
+    // columnas Kind/Item (en el host de Excel la navegacion de un .xls BIFF
+    // puede venir sin ellas): Record.FieldOrDefault no falla si la columna
+    // no existe, y el sheet de metadatos de BI Publisher se excluye por Name.
+    FnHojaPrincipal = (wb as table) as table =>
+        let
+            SinMetadata = Table.SelectRows(wb, each
+                not Text.Contains(Text.Upper(Record.FieldOrDefault(_, "Name", "")), "XDO_METADATA") and
+                not Text.Contains(Text.Upper(Record.FieldOrDefault(_, "Item", "")), "XDO_METADATA")),
+            SoloSheets = Table.SelectRows(SinMetadata, each Record.FieldOrDefault(_, "Kind", "Sheet") = "Sheet"),
+            Candidatas = if Table.RowCount(SoloSheets) > 0 then SoloSheets else SinMetadata
+        in
+            Candidatas{0}[Data],
+
     BinControl = FxGetBinary("CONTROL"),
     WbControl = Excel.Workbook(BinControl, null, true),
-    HojasControl = Table.SelectRows(WbControl, each [Kind] = "Sheet"),
-    DataControl = HojasControl{0}[Data],
+    DataControl = FnHojaPrincipal(WbControl),
     ColsControl = Table.ColumnNames(DataControl),
     CtrlBase = Table.RenameColumns(DataControl, {{ColsControl{0}, "__Cod"}, {ColsControl{1}, "__Nom"}}),
     CtrlFilas = Table.SelectRows(Table.Skip(CtrlBase, 1), each
@@ -132,7 +145,7 @@ let
     // =========================================================
     BinAsegurado = FxGetBinary("ASEGURADO"),
     WbAseg = Excel.Workbook(BinAsegurado, null, true),
-    HojaAseg = Table.SelectRows(WbAseg, each [Kind] = "Sheet" and [Item] <> "XDO_METADATA"){0}[Data],
+    HojaAseg = FnHojaPrincipal(WbAseg),
     ColsAseg = Table.ColumnNames(HojaAseg),
     AsegFilas = Table.SelectRows(HojaAseg, each
         Limpiar(Record.Field(_, ColsAseg{8})) = "PRESUPUESTO" and
