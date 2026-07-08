@@ -205,10 +205,23 @@ let
 
     ExpandidoSubcap = Table.RemoveColumns(Table.ExpandRecordColumn(ExtraccionSubcap, "DatosSubcap", {"DescFinal", "Subcap"}), {"SubCapRaw"}),
 
+    // Table.NestedJoin (JoinSubcap, arriba) NO garantiza conservar el orden de
+    // filas cuando la clave de cruce tiene muchos valores repetidos/nulos
+    // (el "Código" de TODOS los insumos es null) - internamente reordena la
+    // tabla para el cruce. El FillDown de Padre (seccion 6) depende de que
+    // las filas esten en el orden real del reporte (cada insumo justo debajo
+    // de SU actividad), asi que hay que restaurar ese orden antes de calcular
+    // Padre - de lo contrario el "rellenar hacia abajo" hereda la actividad
+    // equivocada (se vio como el Padre "pegado" en un codigo fijo para varias
+    // actividades seguidas, aunque la tabla se viera bien ordenada al final
+    // porque hay un Table.Sort por IndiceFila mas adelante, PERO despues de
+    // que Padre ya quedo mal calculado).
+    OrdenadoParaPadres = Table.Sort(ExpandidoSubcap, {{"IndiceFila", Order.Ascending}}),
+
     // =========================================================
     // 6. LÓGICA DE PADRES Y JERARQUÍA
     // =========================================================
-    AddPadreCap = Table.AddColumn(ExpandidoSubcap, "MemoriaCapitulo", each if [Tipo] = "Capítulo" then [Código] else null),
+    AddPadreCap = Table.AddColumn(OrdenadoParaPadres, "MemoriaCapitulo", each if [Tipo] = "Capítulo" then [Código] else null),
     AddPadreAct = Table.AddColumn(AddPadreCap, "MemoriaActividad", each if [Tipo] = "Actividad" then [Código] else null),
     RellenarHaciaAbajo = Table.FillDown(AddPadreAct, {"MemoriaCapitulo", "MemoriaActividad"}),
 
